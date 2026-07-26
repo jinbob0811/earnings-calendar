@@ -13,13 +13,17 @@ DART Open API에서 '실적공시예고' / '기업설명회(IR)개최' 공시를
 
 import os
 import sys
+import re
+import io
 import time
 import html
+import zipfile
 import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
 
 DART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
+DART_DOCUMENT_URL = "https://opendart.fss.or.kr/api/document.xml"
 
 # 조회 기간: 오늘 기준 -3일 ~ +90일
 # 과거는 '후속 IR' 맥락 파악용으로 최소만 남기고, 앞으로 있을 일정 위주로 보여줍니다.
@@ -34,6 +38,14 @@ IR_KEYWORDS = ["기업설명회", "IR개최", "IR 개최"]
 # 예: WATCHLIST = ["SK하이닉스", "삼성전자", "한미반도체"]
 WATCHLIST = []
 
+# 공시 원문에서 실제 개최/발표 예정일을 찾을 때 참고하는 키워드
+# (이 키워드 근처에 있는 날짜를 '진짜 일정'으로 간주합니다)
+EVENT_DATE_HINT_KEYWORDS = ["개최일시", "개최일자", "실적발표일", "발표일시", "일        시", "일   시", "일시"]
+
+DATE_PATTERNS = [
+    re.compile(r"(20\d{2})\s*[.\-년]\s*(\d{1,2})\s*[.\-월]\s*(\d{1,2})\s*일?"),
+]
+
 
 def get_api_key():
     key = os.environ.get("DART_API_KEY")
@@ -41,6 +53,65 @@ def get_api_key():
         print("ERROR: 환경변수 DART_API_KEY가 설정되어 있지 않습니다.", file=sys.stderr)
         sys.exit(1)
     return key
+
+
+def fetch_document_text(api_key, rcept_no):
+    """공시 원문(zip 안의 xml/html)을 받아 순수 텍스트만 추출한다.
+    실패하면 빈 문자열을 반환한다 (호출부에서 rcept_dt로 폴백)."""
+    try:
+        resp = requests.get(
+            DART_DOCUMENT_URL,
+            params={"crtfc_key": api_key, "rcept_no": rcept_no},
+            timeout=15,
+        )
+        resp.raise_for_status()
+
+        if b"PK" != resp.content[:2]:
+            # zip이 아니면(에러 응답 등) 포기
+            return ""
+
+        text_parts = []
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            for name in zf.namelist():
+                raw = zf.read(name)
+                for encoding in ("utf-8", "euc-kr", "cp949"):
+                    try:
+                        text_parts.append(raw.decode(encoding))
+                        break
+                    except UnicodeDecodeError:
+                        continue
+
+        full_text = "\n".join(text_parts)
+        # 태그 제거해서 순수 텍스트만 남김
+        full_text = re.sub(r"<[^>]+>", " ", full_text)
+        return full_text
+    except Exception:
+        return ""
+
+
+def extract_event_date(text, fallback_dt):
+    """문서 텍스트에서 실제 개최/발표 예정일(YYYYMMDD)을 추출한다.
+    못 찾으면 fallback_dt(공시 접수일)를 그대로 반환한다."""
+    if not text:
+        return fallback_dt, False
+
+    for keyword in EVENT_DATE_HINT_KEYWORDS:
+        idx = text.find(keyword)
+        if idx == -1:
+            continue
+        # 키워드 뒤쪽 120자 안에서 날짜 패턴 탐색
+        window = text[idx: idx + 150]
+        for pattern in DATE_PATTERNS:
+            m = pattern.search(window)
+            if m:
+                y, mo, d = m.groups()
+                try:
+                    dt = datetime(int(y), int(mo), int(d))
+                    return dt.strftime("%Y%m%d"), True
+                except ValueError:
+                    continue
+
+    return fallback_dt, False
 
 
 def fetch_disclosures(api_key, bgn_de, end_de):
@@ -311,7 +382,7 @@ def main():
 
     print(f"전체 수신 공시 수: {len(raw_list)}")
 
-    grouped = defaultdict(list)
+    matched_items = []
     for item in raw_list:
         report_nm = item.get("report_nm", "")
         tag = classify(report_nm)
@@ -322,16 +393,36 @@ def main():
         if WATCHLIST and corp_name not in WATCHLIST:
             continue
 
-        grouped[item["rcept_dt"]].append(
+        matched_items.append(
             {
                 "corp_name": corp_name,
                 "tag": tag,
                 "rcept_no": item.get("rcept_no", ""),
+                "rcept_dt": item.get("rcept_dt", ""),
             }
         )
 
-    matched_count = sum(len(v) for v in grouped.values())
-    print(f"필터링 후 매칭 공시 수: {matched_count}")
+    print(f"필터링 후 매칭 공시 수: {len(matched_items)}")
+    print("공시 원문에서 실제 개최/발표일 추출 중...")
+
+    grouped = defaultdict(list)
+    extracted_ok = 0
+    for i, it in enumerate(matched_items):
+        text = fetch_document_text(api_key, it["rcept_no"])
+        event_date, found = extract_event_date(text, it["rcept_dt"])
+        if found:
+            extracted_ok += 1
+        time.sleep(0.15)  # API 호출 과도 방지
+
+        grouped[event_date].append(
+            {
+                "corp_name": it["corp_name"],
+                "tag": it["tag"],
+                "rcept_no": it["rcept_no"],
+            }
+        )
+
+    print(f"원문에서 실제 날짜 추출 성공: {extracted_ok}/{len(matched_items)}건 (나머지는 공시 접수일로 대체)")
 
     out_html = generate_html(grouped)
 
