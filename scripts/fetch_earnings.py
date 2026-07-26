@@ -21,9 +21,10 @@ from collections import defaultdict
 
 DART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
 
-# 조회 기간: 오늘 기준 -7일 ~ +30일 (최근 공시 + 향후 예정 공시 폭넓게 커버)
-DAYS_BACK = 7
-DAYS_FORWARD = 30
+# 조회 기간: 오늘 기준 -14일 ~ +90일 (최근 공시 + 향후 예정 공시 폭넓게 커버)
+# 필요하면 숫자를 더 늘려도 됩니다. DART API 자체 한도는 넉넉해서 문제 없습니다.
+DAYS_BACK = 14
+DAYS_FORWARD = 90
 
 # report_nm(보고서명)에 아래 키워드가 포함되면 '실적' 또는 'IR' 관련 공시로 분류
 EARNINGS_KEYWORDS = ["실적공시", "잠정실적", "결산실적"]
@@ -107,12 +108,12 @@ def generate_html(grouped):
             tag = it["tag"]
             link = build_dart_link(it["rcept_no"])
             item_links.append(
-                f'<a href="{link}" target="_blank" rel="noopener">{corp}'
+                f'<a href="{link}" target="_blank" rel="noopener" data-corp="{corp}">{corp}'
                 f'<span class="tag tag-{tag}">{tag}</span></a>'
             )
 
         rows_html.append(
-            f'<div class="day-row">'
+            f'<div class="day-row" data-corps="{html.escape(",".join(it["corp_name"] for it in items))}">'
             f'<div class="day-label">{date_display}<span class="count">{len(items)}</span></div>'
             f'<div class="day-items">{"".join(item_links)}</div>'
             f'</div>'
@@ -174,12 +175,60 @@ def generate_html(grouped):
   }}
   .tag-예고 {{ background: #3730a3; color: #c7d2fe; }}
   .tag-IR {{ background: #065f46; color: #a7f3d0; }}
+  .search-box {{
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 14px;
+    margin-bottom: 20px;
+    background: #1a1d24;
+    border: 1px solid #2b303b;
+    border-radius: 8px;
+    color: #e5e7eb;
+    font-size: 14px;
+  }}
+  .search-box::placeholder {{ color: #6b7280; }}
+  .day-row.hidden {{ display: none; }}
+  .day-items a.hidden {{ display: none; }}
+  #empty-msg {{ display: none; color: #9ca3af; padding: 20px 0; }}
 </style>
 </head>
 <body>
   <h1>실적 발표 일정 캘린더</h1>
   <div class="meta">총 {total_count}건 · 생성 {today_str} · 출처: DART(금융감독원 전자공시시스템)</div>
+  <input id="search-box" class="search-box" type="text" placeholder="기업명 검색 (예: SK하이닉스, 삼성전자)">
+  <div id="calendar">
   {"".join(rows_html) if rows_html else "<p>표시할 공시가 없습니다.</p>"}
+  </div>
+  <div id="empty-msg">검색 결과가 없습니다.</div>
+
+  <script>
+    const searchBox = document.getElementById('search-box');
+    const dayRows = Array.from(document.querySelectorAll('.day-row'));
+    const emptyMsg = document.getElementById('empty-msg');
+
+    searchBox.addEventListener('input', () => {{
+      const q = searchBox.value.trim().toLowerCase();
+      let visibleDays = 0;
+
+      dayRows.forEach(row => {{
+        const links = Array.from(row.querySelectorAll('.day-items a'));
+        let visibleInRow = 0;
+
+        links.forEach(a => {{
+          const corp = (a.dataset.corp || '').toLowerCase();
+          const match = q === '' || corp.includes(q);
+          a.classList.toggle('hidden', !match);
+          if (match) visibleInRow++;
+        }});
+
+        const rowMatch = visibleInRow > 0;
+        row.classList.toggle('hidden', !rowMatch);
+        if (rowMatch) visibleDays++;
+      }});
+
+      emptyMsg.style.display = (visibleDays === 0) ? 'block' : 'none';
+    }});
+  </script>
 </body>
 </html>
 """
