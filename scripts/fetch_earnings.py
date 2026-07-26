@@ -21,9 +21,9 @@ from collections import defaultdict
 
 DART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
 
-# 조회 기간: 오늘 기준 -14일 ~ +90일 (최근 공시 + 향후 예정 공시 폭넓게 커버)
-# 필요하면 숫자를 더 늘려도 됩니다. DART API 자체 한도는 넉넉해서 문제 없습니다.
-DAYS_BACK = 14
+# 조회 기간: 오늘 기준 -3일 ~ +90일
+# 과거는 '후속 IR' 맥락 파악용으로 최소만 남기고, 앞으로 있을 일정 위주로 보여줍니다.
+DAYS_BACK = 3
 DAYS_FORWARD = 90
 
 # report_nm(보고서명)에 아래 키워드가 포함되면 '실적' 또는 'IR' 관련 공시로 분류
@@ -92,8 +92,11 @@ def build_dart_link(rcept_no):
 
 
 def generate_html(grouped):
-    today_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d %H:%M")
+    today_key = now.strftime("%Y%m%d")
     rows_html = []
+    today_anchor_added = False
 
     for date_key in sorted(grouped.keys()):
         items = grouped[date_key]
@@ -101,6 +104,9 @@ def generate_html(grouped):
             datetime.strptime(date_key, "%Y%m%d").weekday()
         ]
         date_display = datetime.strptime(date_key, "%Y%m%d").strftime("%m.%d") + weekday
+        is_past = date_key < today_key
+        is_today = date_key == today_key
+        row_class = "day-row past" if is_past else "day-row"
 
         item_links = []
         for it in items:
@@ -112,12 +118,20 @@ def generate_html(grouped):
                 f'<span class="tag tag-{tag}">{tag}</span></a>'
             )
 
+        # 오늘 날짜 위치에 앵커/구분선 삽입 (오늘 날짜 자체 공시가 없어도 위치 표시)
+        if not today_anchor_added and date_key >= today_key:
+            rows_html.append('<div id="today-marker" class="today-divider">오늘 ↓ 다가오는 일정</div>')
+            today_anchor_added = True
+
         rows_html.append(
-            f'<div class="day-row" data-corps="{html.escape(",".join(it["corp_name"] for it in items))}">'
+            f'<div class="{row_class}" data-corps="{html.escape(",".join(it["corp_name"] for it in items))}">'
             f'<div class="day-label">{date_display}<span class="count">{len(items)}</span></div>'
             f'<div class="day-items">{"".join(item_links)}</div>'
             f'</div>'
         )
+
+    if not today_anchor_added:
+        rows_html.append('<div id="today-marker" class="today-divider">오늘 ↓ 다가오는 일정</div>')
 
     total_count = sum(len(v) for v in grouped.values())
 
@@ -190,11 +204,22 @@ def generate_html(grouped):
   .day-row.hidden {{ display: none; }}
   .day-items a.hidden {{ display: none; }}
   #empty-msg {{ display: none; color: #9ca3af; padding: 20px 0; }}
+  .day-row.past {{ opacity: 0.45; }}
+  .today-divider {{
+    margin: 16px 0 8px;
+    padding: 6px 10px;
+    background: #1e293b;
+    border-left: 3px solid #60a5fa;
+    color: #93c5fd;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 4px;
+  }}
 </style>
 </head>
 <body>
   <h1>실적 발표 일정 캘린더</h1>
-  <div class="meta">총 {total_count}건 · 생성 {today_str} · 출처: DART(금융감독원 전자공시시스템)</div>
+  <div class="meta">총 {total_count}건 · 생성 {today_str} · 지난 3일 + 향후 90일 · 흐린 항목은 이미 지난 일정</div>
   <input id="search-box" class="search-box" type="text" placeholder="기업명 검색 (예: SK하이닉스, 삼성전자)">
   <div id="calendar">
   {"".join(rows_html) if rows_html else "<p>표시할 공시가 없습니다.</p>"}
@@ -227,6 +252,14 @@ def generate_html(grouped):
       }});
 
       emptyMsg.style.display = (visibleDays === 0) ? 'block' : 'none';
+    }});
+
+    // 페이지를 열면 자동으로 '오늘' 위치로 스크롤 (과거 일정을 먼저 안 봐도 되도록)
+    window.addEventListener('DOMContentLoaded', () => {{
+      const marker = document.getElementById('today-marker');
+      if (marker) {{
+        marker.scrollIntoView({{ behavior: 'instant', block: 'start' }});
+      }}
     }});
   </script>
 </body>
