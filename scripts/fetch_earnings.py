@@ -25,9 +25,12 @@ from collections import defaultdict
 DART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
 DART_DOCUMENT_URL = "https://opendart.fss.or.kr/api/document.xml"
 
-# 조회 기간: 오늘 기준 -3일 ~ +90일
-# 과거는 '후속 IR' 맥락 파악용으로 최소만 남기고, 앞으로 있을 일정 위주로 보여줍니다.
-DAYS_BACK = 3
+# 조회 기간: 오늘 기준 -45일 ~ +90일
+# IR 개최 공시는 실제 행사보다 2~3주 전에 미리 접수되는 경우가 많아서,
+# 접수일 기준 검색 범위를 넉넉히 잡아야 SK하이닉스/삼성전자 같은 대기업 IR도 놓치지 않습니다.
+# (화면에 보여줄 때는 '실제 행사일' 기준으로 과거/미래를 나누므로, 검색 범위를 넓혀도
+#  지난 일정이 다시 잔뜩 보이지는 않습니다)
+DAYS_BACK = 45
 DAYS_FORWARD = 90
 
 # report_nm(보고서명)에 아래 키워드가 포함되면 '실적' 또는 'IR' 관련 공시로 분류
@@ -331,7 +334,7 @@ def generate_html(grouped):
   <h1>실적 발표 일정 캘린더</h1>
   <div class="meta">총 {total_count}건 (다가오는 일정 {total_count - past_count}건) · 생성 {today_str} · 출처: DART(금융감독원 전자공시시스템)</div>
   <input id="search-box" class="search-box" type="text" placeholder="기업명 검색 (예: SK하이닉스, 삼성전자)">
-  {f'<div id="past-toggle" class="past-toggle">지난 3일 일정 {past_count}건 보기 ▾</div>' if past_count > 0 else ''}
+  {f'<div id="past-toggle" class="past-toggle">지난 일정 {past_count}건 보기 ▾</div>' if past_count > 0 else ''}
   <div id="calendar">
   {"".join(rows_html) if rows_html else "<p>표시할 공시가 없습니다.</p>"}
   </div>
@@ -452,21 +455,30 @@ def main():
     grouped = defaultdict(list)
     extracted_ok = 0
     future_count = 0
+    tag_stats = defaultdict(lambda: {"total": 0, "found": 0, "future": 0})
+
     for i, it in enumerate(matched_items):
         text = fetch_document_text(api_key, it["rcept_no"])
         event_date, event_time, found = extract_event_date(text, it["rcept_dt"])
         if found:
             extracted_ok += 1
-        if event_date > today_key:
+        is_future = event_date > today_key
+        if is_future:
             future_count += 1
         time.sleep(0.15)  # API 호출 과도 방지
 
-        # 디버그: 처음 20건은 회사명 -> 추출된 날짜/시간을 그대로 로그에 남긴다
-        if i < 20:
+        tag_stats[it["tag"]]["total"] += 1
+        if found:
+            tag_stats[it["tag"]]["found"] += 1
+        if is_future:
+            tag_stats[it["tag"]]["future"] += 1
+
+        # 디버그: 처음 30건은 회사명/태그 -> 추출된 날짜/시간을 그대로 로그에 남긴다
+        if i < 30:
             marker = "O" if found else "x"
-            future_marker = "(미래)" if event_date > today_key else "(과거/오늘)"
+            future_marker = "(미래)" if is_future else "(과거/오늘)"
             time_display = event_time or "-"
-            print(f"  [{marker}] {it['corp_name']} | rcept_dt={it['rcept_dt']} -> event_date={event_date} {time_display} {future_marker}")
+            print(f"  [{marker}][{it['tag']}] {it['corp_name']} | rcept_dt={it['rcept_dt']} -> event_date={event_date} {time_display} {future_marker}")
 
         grouped[event_date].append(
             {
@@ -479,6 +491,8 @@ def main():
 
     print(f"원문에서 실제 날짜 추출 성공: {extracted_ok}/{len(matched_items)}건 (나머지는 공시 접수일로 대체)")
     print(f"추출된 날짜가 오늘보다 미래인 건수: {future_count}/{len(matched_items)}건")
+    for tag_name, stats in tag_stats.items():
+        print(f"  태그별 통계 [{tag_name}]: 전체 {stats['total']}건 / 날짜추출성공 {stats['found']}건 / 미래 {stats['future']}건")
 
     out_html = generate_html(grouped)
 
