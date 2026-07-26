@@ -96,7 +96,7 @@ def generate_html(grouped):
     today_str = now.strftime("%Y-%m-%d %H:%M")
     today_key = now.strftime("%Y%m%d")
     rows_html = []
-    today_anchor_added = False
+    past_count = 0
 
     for date_key in sorted(grouped.keys()):
         items = grouped[date_key]
@@ -105,8 +105,9 @@ def generate_html(grouped):
         ]
         date_display = datetime.strptime(date_key, "%Y%m%d").strftime("%m.%d") + weekday
         is_past = date_key < today_key
-        is_today = date_key == today_key
         row_class = "day-row past" if is_past else "day-row"
+        if is_past:
+            past_count += len(items)
 
         item_links = []
         for it in items:
@@ -118,20 +119,12 @@ def generate_html(grouped):
                 f'<span class="tag tag-{tag}">{tag}</span></a>'
             )
 
-        # 오늘 날짜 위치에 앵커/구분선 삽입 (오늘 날짜 자체 공시가 없어도 위치 표시)
-        if not today_anchor_added and date_key >= today_key:
-            rows_html.append('<div id="today-marker" class="today-divider">오늘 ↓ 다가오는 일정</div>')
-            today_anchor_added = True
-
         rows_html.append(
             f'<div class="{row_class}" data-corps="{html.escape(",".join(it["corp_name"] for it in items))}">'
             f'<div class="day-label">{date_display}<span class="count">{len(items)}</span></div>'
             f'<div class="day-items">{"".join(item_links)}</div>'
             f'</div>'
         )
-
-    if not today_anchor_added:
-        rows_html.append('<div id="today-marker" class="today-divider">오늘 ↓ 다가오는 일정</div>')
 
     total_count = sum(len(v) for v in grouped.values())
 
@@ -204,29 +197,47 @@ def generate_html(grouped):
   .day-row.hidden {{ display: none; }}
   .day-items a.hidden {{ display: none; }}
   #empty-msg {{ display: none; color: #9ca3af; padding: 20px 0; }}
-  .day-row.past {{ opacity: 0.45; }}
-  .today-divider {{
-    margin: 16px 0 8px;
-    padding: 6px 10px;
-    background: #1e293b;
-    border-left: 3px solid #60a5fa;
-    color: #93c5fd;
-    font-size: 13px;
-    font-weight: 600;
-    border-radius: 4px;
+  .day-row.past {{ display: none; }}
+  .day-row.past.show-past {{ display: flex; opacity: 0.5; }}
+  .past-toggle {{
+    display: inline-block;
+    margin-bottom: 16px;
+    padding: 6px 12px;
+    background: #1a1d24;
+    border: 1px solid #2b303b;
+    border-radius: 6px;
+    color: #9ca3af;
+    font-size: 12px;
+    cursor: pointer;
   }}
+  .past-toggle:hover {{ background: #22262f; }}
 </style>
 </head>
 <body>
   <h1>실적 발표 일정 캘린더</h1>
-  <div class="meta">총 {total_count}건 · 생성 {today_str} · 지난 3일 + 향후 90일 · 흐린 항목은 이미 지난 일정</div>
+  <div class="meta">총 {total_count}건 (다가오는 일정 {total_count - past_count}건) · 생성 {today_str} · 출처: DART(금융감독원 전자공시시스템)</div>
   <input id="search-box" class="search-box" type="text" placeholder="기업명 검색 (예: SK하이닉스, 삼성전자)">
+  {f'<div id="past-toggle" class="past-toggle">지난 3일 일정 {past_count}건 보기 ▾</div>' if past_count > 0 else ''}
   <div id="calendar">
   {"".join(rows_html) if rows_html else "<p>표시할 공시가 없습니다.</p>"}
   </div>
   <div id="empty-msg">검색 결과가 없습니다.</div>
 
   <script>
+    const pastToggle = document.getElementById('past-toggle');
+    if (pastToggle) {{
+      let shown = false;
+      pastToggle.addEventListener('click', () => {{
+        shown = !shown;
+        document.querySelectorAll('.day-row.past').forEach(row => {{
+          row.classList.toggle('show-past', shown);
+        }});
+        pastToggle.textContent = shown
+          ? pastToggle.textContent.replace('▾', '▴').replace('보기', '숨기기')
+          : pastToggle.textContent.replace('▴', '▾').replace('숨기기', '보기');
+      }});
+    }}
+
     const searchBox = document.getElementById('search-box');
     const dayRows = Array.from(document.querySelectorAll('.day-row'));
     const emptyMsg = document.getElementById('empty-msg');
@@ -252,14 +263,6 @@ def generate_html(grouped):
       }});
 
       emptyMsg.style.display = (visibleDays === 0) ? 'block' : 'none';
-    }});
-
-    // 페이지를 열면 자동으로 '오늘' 위치로 스크롤 (과거 일정을 먼저 안 봐도 되도록)
-    window.addEventListener('DOMContentLoaded', () => {{
-      const marker = document.getElementById('today-marker');
-      if (marker) {{
-        marker.scrollIntoView({{ behavior: 'instant', block: 'start' }});
-      }}
     }});
   </script>
 </body>
