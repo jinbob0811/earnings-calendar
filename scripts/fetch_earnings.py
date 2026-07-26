@@ -473,6 +473,12 @@ def main():
         if is_future:
             tag_stats[it["tag"]]["future"] += 1
 
+        # 디버그: IR 태그 항목 중 처음 5건은 실제로 받아온 텍스트 길이/내용 일부를 로그에 남긴다
+        if it["tag"] == "IR" and tag_stats["IR"]["total"] <= 5:
+            snippet = normalize_whitespace(text)[:300].replace("\n", " ") if text else "(빈 텍스트 - 문서를 못 받아왔음)"
+            print(f"  [IR 디버그] {it['corp_name']} rcept_no={it['rcept_no']} text_len={len(text)}")
+            print(f"    내용 일부: {snippet}")
+
         # 디버그: 처음 30건은 회사명/태그 -> 추출된 날짜/시간을 그대로 로그에 남긴다
         if i < 30:
             marker = "O" if found else "x"
