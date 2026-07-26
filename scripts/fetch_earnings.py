@@ -25,12 +25,13 @@ from collections import defaultdict
 DART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
 DART_DOCUMENT_URL = "https://opendart.fss.or.kr/api/document.xml"
 
-# 조회 기간: 오늘 기준 -45일 ~ +90일
-# IR 개최 공시는 실제 행사보다 2~3주 전에 미리 접수되는 경우가 많아서,
-# 접수일 기준 검색 범위를 넉넉히 잡아야 SK하이닉스/삼성전자 같은 대기업 IR도 놓치지 않습니다.
+# 조회 기간: 오늘 기준 -90일 ~ +90일
+# IR 개최 공시는 실제 행사보다 2~3주, 길게는 한 달 이상 전에 미리 접수되는 경우도 있어서,
+# 접수일 기준 검색 범위를 넉넉히 잡아야 삼성전자/SK하이닉스 같은 대기업 IR도 놓치지 않습니다.
 # (화면에 보여줄 때는 '실제 행사일' 기준으로 과거/미래를 나누므로, 검색 범위를 넓혀도
 #  지난 일정이 다시 잔뜩 보이지는 않습니다)
-DAYS_BACK = 45
+# 참고: 범위를 늘릴수록 문서 원문을 열어봐야 할 공시 수가 늘어나 실행 시간이 길어집니다.
+DAYS_BACK = 90
 DAYS_FORWARD = 90
 
 # report_nm(보고서명)에 아래 키워드가 포함되면 '실적' 또는 'IR' 관련 공시로 분류
@@ -128,27 +129,49 @@ def extract_event_date(text, fallback_dt):
             continue
         # 키워드 뒤쪽 200자 안에서 날짜/시간 패턴 탐색
         window = text[idx: idx + 200]
-        for pattern in DATE_PATTERNS:
-            m = pattern.search(window)
-            if m:
-                y, mo, d = m.groups()
-                try:
-                    dt = datetime(int(y), int(mo), int(d))
-                except ValueError:
-                    continue
+        result = _search_date_time_in_window(window)
+        if result:
+            return result
 
-                event_time = None
-                # 날짜 패턴 바로 뒤쪽 30자 안에서 시간 패턴 탐색 (예: '14:00', '오후 2시')
-                tail = window[m.end(): m.end() + 30]
-                tm = TIME_PATTERN.search(tail)
-                if tm:
-                    hh, mm = int(tm.group(1)), int(tm.group(2))
-                    if 0 <= hh <= 23 and 0 <= mm <= 59:
-                        event_time = f"{hh:02d}:{mm:02d}"
-
-                return dt.strftime("%Y%m%d"), event_time, True
+    # '일시'는 너무 흔한 단어라 오탐을 줄이기 위해, 모든 등장 위치에서
+    # 아주 가까운 거리(20자 이내)에 날짜가 바로 나오는 경우만 인정한다.
+    # (표 형태 공시는 '일시' 라벨 바로 뒤에 콜론 없이 값이 붙는 경우가 많다)
+    search_start = 0
+    while True:
+        idx = text.find("일시", search_start)
+        if idx == -1:
+            break
+        window = text[idx: idx + 20]
+        result = _search_date_time_in_window(window)
+        if result:
+            return result
+        search_start = idx + 1
 
     return fallback_dt, None, False
+
+
+def _search_date_time_in_window(window):
+    """주어진 텍스트 구간에서 날짜(+가능하면 시간) 패턴을 찾아 반환한다. 못 찾으면 None."""
+    for pattern in DATE_PATTERNS:
+        m = pattern.search(window)
+        if m:
+            y, mo, d = m.groups()
+            try:
+                dt = datetime(int(y), int(mo), int(d))
+            except ValueError:
+                continue
+
+            event_time = None
+            # 날짜 패턴 바로 뒤쪽 30자 안에서 시간 패턴 탐색 (예: '14:00', '오후 2시')
+            tail = window[m.end(): m.end() + 30]
+            tm = TIME_PATTERN.search(tail)
+            if tm:
+                hh, mm = int(tm.group(1)), int(tm.group(2))
+                if 0 <= hh <= 23 and 0 <= mm <= 59:
+                    event_time = f"{hh:02d}:{mm:02d}"
+
+            return dt.strftime("%Y%m%d"), event_time, True
+    return None
 
 
 def fetch_disclosures(api_key, bgn_de, end_de):
