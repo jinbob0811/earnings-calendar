@@ -473,11 +473,24 @@ def main():
         if is_future:
             tag_stats[it["tag"]]["future"] += 1
 
-        # 디버그: IR 태그 항목 중 처음 5건은 실제로 받아온 텍스트 길이/내용 일부를 로그에 남긴다
+        # 디버그: IR 태그 항목 중 처음 5건은, 문서 전체에서 날짜 키워드를 찾아 그 주변 텍스트를 로그에 남긴다
         if it["tag"] == "IR" and tag_stats["IR"]["total"] <= 5:
-            snippet = normalize_whitespace(text)[:300].replace("\n", " ") if text else "(빈 텍스트 - 문서를 못 받아왔음)"
             print(f"  [IR 디버그] {it['corp_name']} rcept_no={it['rcept_no']} text_len={len(text)}")
-            print(f"    내용 일부: {snippet}")
+            if not text:
+                print("    -> 문서 내용을 아예 못 받아왔음 (fetch_document_text 실패)")
+            else:
+                norm = normalize_whitespace(text)
+                any_keyword_found = False
+                for kw in EVENT_DATE_HINT_KEYWORDS:
+                    kw_idx = norm.find(kw)
+                    if kw_idx != -1:
+                        any_keyword_found = True
+                        context = norm[max(0, kw_idx - 10): kw_idx + 80].replace("\n", " ")
+                        print(f"    -> 키워드 '{kw}' 발견 (위치 {kw_idx}): ...{context}...")
+                if not any_keyword_found:
+                    # 키워드가 하나도 없으면, 텍스트 마지막 400자(본문이 뒤쪽에 있는 경우 대비)를 보여준다
+                    tail_sample = norm[-400:].replace("\n", " ")
+                    print(f"    -> 날짜 키워드 전혀 없음. 텍스트 마지막 부분 샘플: {tail_sample}")
 
         # 디버그: 처음 30건은 회사명/태그 -> 추출된 날짜/시간을 그대로 로그에 남긴다
         if i < 30:
