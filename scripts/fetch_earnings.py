@@ -105,11 +105,14 @@ def fetch_document_text(api_key, rcept_no):
         return ""
 
 
+TIME_PATTERN = re.compile(r"(\d{1,2})\s*[:시]\s*(\d{2})")
+
+
 def extract_event_date(text, fallback_dt):
-    """문서 텍스트에서 실제 개최/발표 예정일(YYYYMMDD)을 추출한다.
-    못 찾으면 fallback_dt(공시 접수일)를 그대로 반환한다."""
+    """문서 텍스트에서 실제 개최/발표 예정일(YYYYMMDD)과, 가능하면 시간(HH:MM)까지 추출한다.
+    날짜를 못 찾으면 fallback_dt(공시 접수일)를 그대로 반환한다."""
     if not text:
-        return fallback_dt, False
+        return fallback_dt, None, False
 
     text = normalize_whitespace(text)
 
@@ -117,7 +120,7 @@ def extract_event_date(text, fallback_dt):
         idx = text.find(keyword)
         if idx == -1:
             continue
-        # 키워드 뒤쪽 200자 안에서 날짜 패턴 탐색
+        # 키워드 뒤쪽 200자 안에서 날짜/시간 패턴 탐색
         window = text[idx: idx + 200]
         for pattern in DATE_PATTERNS:
             m = pattern.search(window)
@@ -125,11 +128,21 @@ def extract_event_date(text, fallback_dt):
                 y, mo, d = m.groups()
                 try:
                     dt = datetime(int(y), int(mo), int(d))
-                    return dt.strftime("%Y%m%d"), True
                 except ValueError:
                     continue
 
-    return fallback_dt, False
+                event_time = None
+                # 날짜 패턴 바로 뒤쪽 30자 안에서 시간 패턴 탐색 (예: '14:00', '오후 2시')
+                tail = window[m.end(): m.end() + 30]
+                tm = TIME_PATTERN.search(tail)
+                if tm:
+                    hh, mm = int(tm.group(1)), int(tm.group(2))
+                    if 0 <= hh <= 23 and 0 <= mm <= 59:
+                        event_time = f"{hh:02d}:{mm:02d}"
+
+                return dt.strftime("%Y%m%d"), event_time, True
+
+    return fallback_dt, None, False
 
 
 def fetch_disclosures(api_key, bgn_de, end_de):
@@ -198,13 +211,18 @@ def generate_html(grouped):
         if is_past:
             past_count += len(items)
 
+        # 시간 미정(예고 등)은 먼저, IR처럼 시간이 있는 항목은 이른 시간 순으로 정렬
+        items = sorted(items, key=lambda x: (1, x["event_time"]) if x.get("event_time") else (0, ""))
+
         item_links = []
         for it in items:
             corp = html.escape(it["corp_name"])
             tag = it["tag"]
             link = build_dart_link(it["rcept_no"])
+            time_label = it.get("event_time") or "시간미정"
             item_links.append(
-                f'<a href="{link}" target="_blank" rel="noopener" data-corp="{corp}">{corp}'
+                f'<a href="{link}" target="_blank" rel="noopener" data-corp="{corp}">'
+                f'<span class="time-label">{time_label}</span> {corp}'
                 f'<span class="tag tag-{tag}">{tag}</span></a>'
             )
 
@@ -271,6 +289,13 @@ def generate_html(grouped):
   }}
   .tag-예고 {{ background: #3730a3; color: #c7d2fe; }}
   .tag-IR {{ background: #065f46; color: #a7f3d0; }}
+  .time-label {{
+    display: inline-block;
+    min-width: 42px;
+    color: #6b7280;
+    font-size: 11px;
+    font-family: monospace;
+  }}
   .search-box {{
     width: 100%;
     box-sizing: border-box;
@@ -429,24 +454,26 @@ def main():
     future_count = 0
     for i, it in enumerate(matched_items):
         text = fetch_document_text(api_key, it["rcept_no"])
-        event_date, found = extract_event_date(text, it["rcept_dt"])
+        event_date, event_time, found = extract_event_date(text, it["rcept_dt"])
         if found:
             extracted_ok += 1
         if event_date > today_key:
             future_count += 1
         time.sleep(0.15)  # API 호출 과도 방지
 
-        # 디버그: 처음 20건은 회사명 -> 추출된 날짜를 그대로 로그에 남긴다
+        # 디버그: 처음 20건은 회사명 -> 추출된 날짜/시간을 그대로 로그에 남긴다
         if i < 20:
             marker = "O" if found else "x"
             future_marker = "(미래)" if event_date > today_key else "(과거/오늘)"
-            print(f"  [{marker}] {it['corp_name']} | rcept_dt={it['rcept_dt']} -> event_date={event_date} {future_marker}")
+            time_display = event_time or "-"
+            print(f"  [{marker}] {it['corp_name']} | rcept_dt={it['rcept_dt']} -> event_date={event_date} {time_display} {future_marker}")
 
         grouped[event_date].append(
             {
                 "corp_name": it["corp_name"],
                 "tag": it["tag"],
                 "rcept_no": it["rcept_no"],
+                "event_time": event_time,
             }
         )
 
