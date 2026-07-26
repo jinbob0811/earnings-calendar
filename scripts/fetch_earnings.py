@@ -235,6 +235,22 @@ def generate_html(grouped):
     return html_doc
 
 
+def build_date_chunks(bgn_de, end_de, max_days=88):
+    """DART API는 corp_code 미지정 시 조회 기간이 3개월(약 90일)을 넘으면 안 되므로,
+    전체 조회 기간을 max_days 이하의 여러 구간으로 쪼갠다."""
+    start = datetime.strptime(bgn_de, "%Y%m%d")
+    end = datetime.strptime(end_de, "%Y%m%d")
+
+    chunks = []
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(cursor + timedelta(days=max_days), end)
+        chunks.append((cursor.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d")))
+        cursor = chunk_end + timedelta(days=1)
+
+    return chunks
+
+
 def main():
     api_key = get_api_key()
     today = datetime.now()
@@ -242,7 +258,21 @@ def main():
     end_de = (today + timedelta(days=DAYS_FORWARD)).strftime("%Y%m%d")
 
     print(f"조회 기간: {bgn_de} ~ {end_de}")
-    raw_list = fetch_disclosures(api_key, bgn_de, end_de)
+
+    chunks = build_date_chunks(bgn_de, end_de)
+    print(f"조회 구간 분할: {len(chunks)}개 ({chunks})")
+
+    raw_list = []
+    seen_rcept_no = set()
+    for chunk_bgn, chunk_end in chunks:
+        chunk_list = fetch_disclosures(api_key, chunk_bgn, chunk_end)
+        for item in chunk_list:
+            rcept_no = item.get("rcept_no")
+            if rcept_no in seen_rcept_no:
+                continue
+            seen_rcept_no.add(rcept_no)
+            raw_list.append(item)
+
     print(f"전체 수신 공시 수: {len(raw_list)}")
 
     grouped = defaultdict(list)
