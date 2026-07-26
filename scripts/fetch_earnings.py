@@ -39,12 +39,28 @@ IR_KEYWORDS = ["기업설명회", "IR개최", "IR 개최"]
 WATCHLIST = []
 
 # 공시 원문에서 실제 개최/발표 예정일을 찾을 때 참고하는 키워드
-# (이 키워드 근처에 있는 날짜를 '진짜 일정'으로 간주합니다)
-EVENT_DATE_HINT_KEYWORDS = ["개최일시", "개최일자", "실적발표일", "발표일시", "일        시", "일   시", "일시"]
+# (구체적인 키워드를 먼저 확인하고, 못 찾으면 더 일반적인 키워드로 넘어간다)
+EVENT_DATE_HINT_KEYWORDS = [
+    "실적공시예정일",
+    "결산실적공시예정일",
+    "공시예정일",
+    "개최일시",
+    "개최 일시",
+    "실시일시",
+    "설명회일시",
+    "발표일시",
+    "개최일자",
+]
 
 DATE_PATTERNS = [
     re.compile(r"(20\d{2})\s*[.\-년]\s*(\d{1,2})\s*[.\-월]\s*(\d{1,2})\s*일?"),
 ]
+
+
+def normalize_whitespace(text):
+    """공시 원문은 표 정렬을 위해 글자 사이에 공백이 많이 들어가는 경우가 많다.
+    (예: '공  시  예  정  일') 검색을 위해 연속 공백을 하나로 줄인다."""
+    return re.sub(r"[ \t\u3000]+", " ", text)
 
 
 def get_api_key():
@@ -95,12 +111,14 @@ def extract_event_date(text, fallback_dt):
     if not text:
         return fallback_dt, False
 
+    text = normalize_whitespace(text)
+
     for keyword in EVENT_DATE_HINT_KEYWORDS:
         idx = text.find(keyword)
         if idx == -1:
             continue
-        # 키워드 뒤쪽 120자 안에서 날짜 패턴 탐색
-        window = text[idx: idx + 150]
+        # 키워드 뒤쪽 200자 안에서 날짜 패턴 탐색
+        window = text[idx: idx + 200]
         for pattern in DATE_PATTERNS:
             m = pattern.search(window)
             if m:
@@ -405,14 +423,24 @@ def main():
     print(f"필터링 후 매칭 공시 수: {len(matched_items)}")
     print("공시 원문에서 실제 개최/발표일 추출 중...")
 
+    today_key = today.strftime("%Y%m%d")
     grouped = defaultdict(list)
     extracted_ok = 0
+    future_count = 0
     for i, it in enumerate(matched_items):
         text = fetch_document_text(api_key, it["rcept_no"])
         event_date, found = extract_event_date(text, it["rcept_dt"])
         if found:
             extracted_ok += 1
+        if event_date > today_key:
+            future_count += 1
         time.sleep(0.15)  # API 호출 과도 방지
+
+        # 디버그: 처음 20건은 회사명 -> 추출된 날짜를 그대로 로그에 남긴다
+        if i < 20:
+            marker = "O" if found else "x"
+            future_marker = "(미래)" if event_date > today_key else "(과거/오늘)"
+            print(f"  [{marker}] {it['corp_name']} | rcept_dt={it['rcept_dt']} -> event_date={event_date} {future_marker}")
 
         grouped[event_date].append(
             {
@@ -423,6 +451,7 @@ def main():
         )
 
     print(f"원문에서 실제 날짜 추출 성공: {extracted_ok}/{len(matched_items)}건 (나머지는 공시 접수일로 대체)")
+    print(f"추출된 날짜가 오늘보다 미래인 건수: {future_count}/{len(matched_items)}건")
 
     out_html = generate_html(grouped)
 
